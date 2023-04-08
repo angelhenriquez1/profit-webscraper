@@ -1,0 +1,167 @@
+#Coin Codex Price Predictions####
+
+#Clear data, if needed####
+rm(list = ls())
+
+#Package libraries####
+library(utils)
+library(xml2)
+library(rvest)
+library(stringr)
+#library(tryCatchLog)
+#library(XML)
+#library(lubridate)
+
+#Setting Working Directory with data
+setwd("~/StockProject")
+
+#Retrieving Stock Data From CSV (https://www.nasdaq.com/market-activity/stocks/screener)####
+all_stock_data <- utils::read.csv("nasdaq_screener.csv", stringsAsFactors=FALSE)
+
+#Stocks with weekly options (https://www.cboe.com/us/options/symboldir/weeklys_options/)
+cboesymboldirweeklys <- utils::read.csv("cboesymboldirweeklys.csv", stringsAsFactors = FALSE)
+
+#Stocks with options
+all_stock_data <- merge(all_stock_data, cboesymboldirweeklys, by.x = "Symbol", by.y = "Stock.Symbol")
+
+#USA stocks
+all_stock_data <- subset(all_stock_data, all_stock_data$Country == "United States" | all_stock_data$Country == "")
+
+#Changing stock prices to numeric
+all_stock_data$Last.Sale <- gsub(".*\\$","",all_stock_data$Last.Sale)
+all_stock_data$Last.Sale <- as.numeric(all_stock_data$Last.Sale)
+
+#Stocks > $20
+all_stock_data <- subset(all_stock_data, all_stock_data$Last.Sale > 20)
+
+#List of tickers
+tickers <- all_stock_data$Symbol
+
+#General ratings function####
+ratings_function <- function(tickers, webscraper_function){
+  
+  stock_rating <- lapply(tickers, webscraper_function)
+  
+  rating_data <- rbind(tickers, stock_rating)
+  
+}
+
+#Price prediction ($)####
+price_prediction_webscraper <- function(ticker){
+  
+  coin_codex_price_prediction <- tryCatch({
+
+    price_prediction <- xml2::read_html(paste0("https://coincodex.com/stock/", ticker,"/price-prediction/")) %>%
+      rvest::html_nodes(".data-predicted-price") %>%
+      rvest::html_text() %>%
+      gsub("\\(.*","",. ) %>%
+      gsub(".*\\$","",. ) %>%
+      stringr::str_trim() %>%
+      as.numeric()
+  },
+  error = function(e){NA}
+  )
+
+}
+
+#Profit prediction (%)####
+profit_prediction_webscraper <- function(ticker){
+  
+  coin_codex_profit_prediction <- tryCatch({
+    
+    profit_prediction <- xml2::read_html(paste0("https://coincodex.com/stock/", ticker,"/price-prediction/")) %>%
+      rvest::html_nodes(".data-predicted-price") %>%
+      rvest::html_text() %>%
+      gsub(".*\\(","",. ) %>%
+      gsub("\\%.*","",. ) %>%
+      as.numeric()
+
+},
+error = function(e){NA}
+)
+
+}
+
+warm_up <- function(){
+  
+  price_prediction_testing <- tryCatch({
+
+         price_prediction_testing <- xml2::read_html(paste0("https://coincodex.com/stock/FINV/price-prediction/")) %>%
+           rvest::html_nodes(".data-predicted-price") %>%
+           rvest::html_text() %>%
+           gsub("\\(.*","",. ) %>%
+           gsub(".*\\$","",. ) %>%
+           stringr::str_trim() %>%
+           as.numeric()
+
+},
+  error = function(e){NA}
+)
+}
+
+print(warm_up())
+
+#Dollar Profit ($)####
+#Running profit function on all tickers
+coin_codex_dollar_profit_results1 <- ratings_function(tickers, price_prediction_webscraper)
+coin_codex_dollar_profit_results_df1 <- as.data.frame(t(coin_codex_dollar_profit_results1))
+
+#Tickers with data
+coin_codex_1 <- subset(coin_codex_dollar_profit_results_df1, 
+                       is.na(coin_codex_dollar_profit_results_df1$stock_rating) == FALSE)
+
+#Tickers without data
+coin_codex_sentiment_results_NA1 <- subset(coin_codex_dollar_profit_results_df1, 
+                                          is.na(coin_codex_dollar_profit_results_df1$stock_rating) == TRUE)
+
+tickers_NA1 <- as.character(coin_codex_sentiment_results_NA1$tickers)
+
+#Running profit function on NA ticker subset
+coin_codex_dollar_profit_results2 <- ratings_function(tickers_NA1, price_prediction_webscraper)
+coin_codex_dollar_profit_results_df2 <- as.data.frame(t(coin_codex_dollar_profit_results2))
+
+#Tickers with data
+coin_codex_2 <- subset(coin_codex_dollar_profit_results_df2, 
+                       is.na(coin_codex_dollar_profit_results_df2$stock_rating) == FALSE)
+
+#Tickers without data
+coin_codex_sentiment_results_NA2 <- subset(coin_codex_dollar_profit_results_df2, 
+                                           is.na(coin_codex_dollar_profit_results_df2$stock_rating) == TRUE)
+
+tickers_NA2 <- as.character(coin_codex_sentiment_results_NA2$tickers)
+
+coin_codex_dollar_profit_results3 <- ratings_function(tickers_NA2, price_prediction_webscraper)
+coin_codex_3 <- as.data.frame(t(coin_codex_dollar_profit_results3))
+
+#Joining all 3 data sets
+codex_dollar_profit_data <- rbind(coin_codex_1, coin_codex_2, by = "tickers")
+codex_dollar_profit_data <- rbind(codex_dollar_profit_data, coin_codex_3, by = "tickers")
+
+all_stock_data_with_rating <- merge(all_stock_data, codex_dollar_profit_data, by.x = "Symbol", by.y = "tickers", na.omit == FALSE)
+
+all_stock_data_with_rating$stock_rating <- as.numeric(all_stock_data_with_rating$stock_rating)
+
+all_stock_data_with_rating$stock_rating_percent <- ((all_stock_data_with_rating$stock_rating - all_stock_data_with_rating$Last.Sale)/all_stock_data_with_rating$Last.Sale)*100
+
+rm("coin_codex_dollar_profit_results1")
+rm("coin_codex_dollar_profit_results_df1")
+rm("coin_codex_sentiment_results_NA1")
+rm("coin_codex_dollar_profit_results2")
+rm("coin_codex_dollar_profit_results_df2")
+rm("coin_codex_dollar_profit_results_df3")
+rm("coin_codex_sentiment_results_NA2")
+rm("coin_codex_dollar_profit_results_df2")
+rm("coin_codex_1")
+rm("coin_codex_2")
+rm("coin_codex_3")
+rm("coin_codex_sentiment_results_NA2")
+rm("tickers_NA1")
+rm("tickers_NA2")
+rm("coin_codex_dollar_profit_results3")
+rm("codex_dollar_profit_data")
+
+#Percent Profit (%)####
+#coin_codex_percent_profit_results <- ratings_function(tickers, profit_prediction_webscraper)
+#coin_codex_percent_profit_results_df <- as.data.frame(t(coin_codex_percent_profit_results))
+
+
