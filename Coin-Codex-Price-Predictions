@@ -8,9 +8,6 @@ library(utils)
 library(xml2)
 library(rvest)
 library(stringr)
-#library(tryCatchLog)
-#library(XML)
-#library(lubridate)
 
 #Setting Working Directory with data
 setwd("~/StockProject")
