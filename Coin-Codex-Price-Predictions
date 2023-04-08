@@ -156,6 +156,8 @@ rm("tickers_NA1")
 rm("tickers_NA2")
 rm("coin_codex_dollar_profit_results3")
 rm("codex_dollar_profit_data")
+rm("all_stock_data")
+rm("cboesymboldirweeklys")
 
 #Percent Profit (%)####
 #coin_codex_percent_profit_results <- ratings_function(tickers, profit_prediction_webscraper)
