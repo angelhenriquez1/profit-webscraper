@@ -147,9 +147,6 @@ findoutlier <- function(x) {
   return(x < quantile(x, .25) - 1.5*IQR(x) | x > quantile(x, .75) + 1.5*IQR(x))
 }
 
-
-unique(all_stock_data_with_rating_with_sector$stock_rating)
-
 percent_rating_subset <- subset(all_stock_data_with_rating, all_stock_data_with_rating$Sector != "" & is.na(all_stock_data_with_rating$stock_rating_percent) == FALSE)
 
 df <- percent_rating_subset %>%
