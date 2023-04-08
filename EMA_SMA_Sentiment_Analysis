@@ -1,0 +1,207 @@
+#EMA/SMA Price Predictions####
+
+#Clear data, if needed####
+rm(list = ls())
+
+#Package libraries####
+library(tidyverse)
+library(rvest)
+library(XML)
+library(xml2)
+library(stringr)
+library(tryCatchLog)
+library(lubridate)
+library(tictoc)
+
+#Setting Working Directory with data
+setwd("~/StockProject")
+
+#Retrieving Stock Data From CSV (https://www.nasdaq.com/market-activity/stocks/screener)####
+all_stock_data <- utils::read.csv("nasdaq_screener.csv", stringsAsFactors=FALSE)
+
+#Stocks with weekly options (https://www.cboe.com/us/options/symboldir/weeklys_options/)
+cboesymboldirweeklys <- utils::read.csv("cboesymboldirweeklys.csv", stringsAsFactors = FALSE)
+
+#Stocks with options
+all_stock_data <- merge(all_stock_data, cboesymboldirweeklys, by.x = "Symbol", by.y = "Stock.Symbol")
+
+#USA stocks
+all_stock_data <- subset(all_stock_data, all_stock_data$Country == "United States" | all_stock_data$Country == "")
+
+#Changing stock prices to numeric
+all_stock_data$Last.Sale <- gsub(".*\\$","",all_stock_data$Last.Sale)
+all_stock_data$Last.Sale <- as.numeric(all_stock_data$Last.Sale)
+
+#Stocks > $20
+all_stock_data <- subset(all_stock_data, all_stock_data$Last.Sale > 20)
+
+#List of tickers
+tickers <- all_stock_data$Symbol
+
+#MA Data####
+coin_codex_sentiment_webscraper <- function(ticker){
+  
+  coin_codex_bullish <- tryCatch({
+  #EMA/SMA Bullish sentiment
+    coin_codex_bullish <- read_html(paste0("https://coincodex.com/stock/", ticker,"/price-prediction/")) %>%
+      html_nodes("div.change-up") %>%
+      html_text() %>%
+      gsub("Bullish ", "", ., perl = TRUE) %>%
+      gsub("%", "", ., perl = TRUE) %>%
+      as.numeric()
+  },
+  error = function(e){NA}
+  )
+  
+  coin_codex_bullish <- tryCatch({
+    coin_codex_bullish <- if_else(is.na(coin_codex_bullish[1] == TRUE), coin_codex_bullish[2], coin_codex_bullish[1])
+  },
+    error = function(e){NA}
+  )
+
+}
+
+#General ratings function####
+ratings_function <- function(tickers, webscraper_function){
+    
+    stock_rating <- lapply(tickers, webscraper_function)
+    
+    rating_data <- rbind(tickers, stock_rating)
+    
+  }
+
+#First Round of tickers
+print("First")
+
+coin_codex_sentiment_results <- ratings_function(tickers, coin_codex_sentiment_webscraper)
+
+coin_codex_sentiment_results_df <- as.data.frame(t(coin_codex_sentiment_results))
+
+#Second round of tickers
+coin_codex_sentiment_results_NA <- subset(coin_codex_sentiment_results_df, 
+                                          is.na(coin_codex_sentiment_results_df$stock_rating) == TRUE)
+
+tickers_NA <- coin_codex_sentiment_results_NA$tickers
+
+print("Second")
+coin_codex_sentiment_results_2 <- ratings_function(tickers_NA, coin_codex_sentiment_webscraper)
+
+coin_codex_sentiment_results_2_df <- as.data.frame(t(coin_codex_sentiment_results_2))
+
+#Third round of tickers
+coin_codex_sentiment_results_NA_2 <- subset(coin_codex_sentiment_results_2_df, 
+                                          is.na(coin_codex_sentiment_results_2_df$stock_rating) == TRUE)
+
+tickers_NA_2 <- coin_codex_sentiment_results_NA_2$tickers
+
+print("Third")
+coin_codex_sentiment_results_3 <- ratings_function(tickers_NA_2, coin_codex_sentiment_webscraper)
+
+coin_codex_sentiment_results_3_df <- as.data.frame(t(coin_codex_sentiment_results_3))
+
+#First subset of stocks with data
+codex_data_1 <- subset(coin_codex_sentiment_results_df, is.na(coin_codex_sentiment_results_df$stock_rating) == FALSE)
+
+#Second subset of stocks with data
+codex_data_2 <- subset(coin_codex_sentiment_results_2_df, is.na(coin_codex_sentiment_results_2_df$stock_rating) == FALSE)
+
+#Third subset of stocks with data
+codex_data_3 <- subset(coin_codex_sentiment_results_3_df, is.na(coin_codex_sentiment_results_3_df$stock_rating) == FALSE)
+
+#Joining all 3 data sets
+codex_data <- rbind(codex_data_1, codex_data_2, by = "tickers")
+codex_data <- rbind(codex_data, codex_data_3, by = "tickers")
+
+all_stock_data_with_rating <- merge(all_stock_data, codex_data, by.x = "Symbol", by.y = "tickers")
+
+all_stock_data_with_rating$stock_rating <- as.numeric(all_stock_data_with_rating$stock_rating)
+#all_stock_data_with_rating$tickers <- as.character(all_stock_data_with_rating$tickers)
+
+#Preparing Graphs####
+findoutlier <- function(x) {
+  return(x < quantile(x, .25) - 1.5*IQR(x) | x > quantile(x, .75) + 1.5*IQR(x))
+}
+
+df <- all_stock_data_with_rating %>%
+  dplyr::group_by(Sector) %>%
+  dplyr::mutate(outlier = ifelse(findoutlier(stock_rating), Symbol, NA))
+
+#Graph of Sector Rating variation (Determine Profitable Sectors)
+ggplot(df, aes(x = Sector, y = stock_rating, fill = Sector)) +
+  geom_boxplot() +
+  geom_text(aes(label=outlier), na.rm=TRUE, hjust=-.5) +
+  coord_flip() +
+  ylab("0% = Strong Sell Signal, 100% = Strong Buy Signal")
+
+
+stock_bullish_pattern_data <- df[c('Symbol', 'stock_rating')]
+
+#middle_stock_profitability_range <- subset(all_stock_data_with_rating, 
+#                                           all_stock_data_with_rating$stock_rating > 25 & 
+#                                           all_stock_data_with_rating$stock_rating < 75)
+
+#middle_stock_profitability_range_50 <- subset(all_stock_data_with_rating, 
+#                                           all_stock_data_with_rating$stock_rating == 50)
+
+#df2 <- middle_stock_profitability_range %>%
+#  group_by(Sector) %>%
+#  mutate(outlier = ifelse(findoutlier(stock_rating), Symbol, NA))
+
+#ggplot(df2, aes(x = Sector, y = stock_rating, fill = Sector)) +
+#  geom_boxplot() +
+#  geom_text(aes(label=outlier), na.rm=TRUE, hjust=-.5) +
+#  coord_flip() +
+#  ylab("0% = Strong Sell Signal, 100% = Strong Buy Signal")
+
+#write.table(stock_bullish_pattern_data, file = "stock_bullish_pattern_data_3/23/2023.txt", sep = ",", quote = FALSE, row.names = F)
+
+#Graph of Stock variation by Sector
+#industrials <- subset(all_stock_data_with_rating,  all_stock_data_with_rating$Sector == "Industrials")
+#industrials <- subset(industrials,  Sector == "Industrials")
+
+#Creating consumer_discretionary data frame
+#industrials_sector_df <- industrials %>%
+#  group_by(Industry) %>%
+#  mutate(outlier = ifelse(findoutlier(stock_rating), Symbol, NA))
+
+#Sector Rating Variation
+#ggplot(industrials_sector_df, aes(x = Industry, y = stock_rating, fill = Industry)) +
+#  geom_boxplot() +
+#  geom_text(aes(label=Symbol), na.rm=TRUE, hjust=-.5) +
+#  theme(legend.position="none") +
+#  coord_flip() +
+#  ylab("0% = Strong Sell Signal, 100% = Strong Buy Signal")
+
+#Graph of Stock variation by Sector
+#package_goods_and_cosmetics <- subset(all_stock_data_with_rating,  all_stock_data_with_rating$Sector == "`Package Goods/Cosmetics`")
+#package_goods_and_cosmetics <- subset(package_goods_and_cosmetics,  Sector == "Package Goods/Cosmetics")
+
+#Creating consumer_discretionary data frame
+#consumer_discretionary_sector_df <- consumer_discretionary %>%
+#  group_by(Industry) %>%
+#  mutate(outlier = ifelse(findoutlier(stock_rating), Symbol, NA))
+
+#Sector Rating Variation
+#ggplot(consumer_discretionary_sector_df, aes(x = Industry, y = stock_rating, fill = Industry)) +
+#  geom_boxplot() +
+#  geom_text(aes(label=outlier), na.rm=TRUE, hjust=-.5) +
+  #theme(legend.position="none") +
+#  coord_flip()
+
+#real_estate <- subset(all_stock_data_with_rating,  all_stock_data$Sector == "Real Estate")
+
+#Creating consumer_discretionary data frame
+#sector_telecommunications_df <- consumer_discretionary$Industry %>%
+#  group_by(Industry) %>%
+#  mutate(outlier = ifelse(findoutlier(stock_rating), Symbol, NA))
+
+#Sector Rating Variation
+#ggplot(sector_telecommunications_df, aes(x = Industry, y = stock_rating, fill = Industry)) +
+#  geom_boxplot() +
+#  geom_text(aes(label=outlier), na.rm=TRUE, hjust=-.5) #+
+#theme(legend.position="none")
+
+#real_estate <- subset(all_stock_data_with_rating,  all_stock_data$Sector == "Real Estate")
+#basic_materials <- subset(all_stock_data_with_rating,  all_stock_data$Sector == "Basic Materials")
+#energy <- subset(all_stock_data_with_rating,  all_stock_data$Sector == "Energy")
+#telecommunications <- subset(all_stock_data_with_rating,  all_stock_data$Sector == "Telecommunications")
