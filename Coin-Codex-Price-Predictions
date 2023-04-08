@@ -4,10 +4,12 @@
 rm(list = ls())
 
 #Package libraries####
+library(tidyverse)
 library(utils)
 library(xml2)
 library(rvest)
 library(stringr)
+library(ggrepel)
 
 #Setting Working Directory with data
 setwd("~/StockProject")
@@ -140,6 +142,29 @@ all_stock_data_with_rating$stock_rating <- as.numeric(all_stock_data_with_rating
 
 all_stock_data_with_rating$stock_rating_percent <- ((all_stock_data_with_rating$stock_rating - all_stock_data_with_rating$Last.Sale)/all_stock_data_with_rating$Last.Sale)*100
 
+#Preparing Graphs####
+findoutlier <- function(x) {
+  return(x < quantile(x, .25) - 1.5*IQR(x) | x > quantile(x, .75) + 1.5*IQR(x))
+}
+
+
+unique(all_stock_data_with_rating_with_sector$stock_rating)
+
+percent_rating_subset <- subset(all_stock_data_with_rating, all_stock_data_with_rating$Sector != "" & is.na(all_stock_data_with_rating$stock_rating_percent) == FALSE)
+
+df <- percent_rating_subset %>%
+  group_by(Sector) %>%
+  mutate(outlier = ifelse(findoutlier(stock_rating_percent), Symbol, NA))
+
+df_subset <- subset(df, df$stock_rating_percent >-50 & df$stock_rating_percent < 50)
+
+#Graph of Sector Rating variation (Focus on Profitable Outliers)
+ggplot(df_subset, aes(x = Sector, y = stock_rating_percent, fill = Sector)) +
+  geom_boxplot() +
+  geom_label_repel(aes(label=outlier), na.rm = TRUE) +
+  coord_flip() +
+  ylab("5 Day Predicted Percent Price Change (%)")
+
 rm("coin_codex_dollar_profit_results1")
 rm("coin_codex_dollar_profit_results_df1")
 rm("coin_codex_sentiment_results_NA1")
@@ -158,9 +183,3 @@ rm("coin_codex_dollar_profit_results3")
 rm("codex_dollar_profit_data")
 rm("all_stock_data")
 rm("cboesymboldirweeklys")
-
-#Percent Profit (%)####
-#coin_codex_percent_profit_results <- ratings_function(tickers, profit_prediction_webscraper)
-#coin_codex_percent_profit_results_df <- as.data.frame(t(coin_codex_percent_profit_results))
-
-
