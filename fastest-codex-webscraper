@@ -1,0 +1,245 @@
+#Coin Codex Price Predictions####
+
+#Clear data, if needed####
+#rm(list = ls())
+
+#Package libraries####
+library(tidyverse)
+library(utils)
+library(xml2)
+library(rvest)
+library(stringr)
+library(ggrepel)
+library(doSNOW)
+library(foreach)
+library(ggplot2)
+
+#Setting Working Directory with data
+setwd("~/StockProject")
+
+#Retrieving Stock Data From CSV (https://www.nasdaq.com/market-activity/stocks/screener)####
+all_stock_data <- read.csv("nasdaq_screener.csv", stringsAsFactors=FALSE)
+
+#Stocks with weekly options (https://www.cboe.com/us/options/symboldir/weeklys_options/)
+cboesymboldirweeklys <- read.csv("cboesymboldirweeklys.csv", stringsAsFactors = FALSE)
+
+#Stocks with options
+all_stock_data <- merge(cboesymboldirweeklys, all_stock_data, by.x = "Stock.Symbol", by.y = "Symbol")
+
+#USA stocks
+all_stock_data <- subset(all_stock_data, all_stock_data$Country == "United States" | all_stock_data$Country == "")
+
+#Changing stock prices to numeric
+all_stock_data$Last.Sale <- gsub(".*\\$","",all_stock_data$Last.Sale)
+all_stock_data$Last.Sale <- as.numeric(all_stock_data$Last.Sale)
+
+#Stocks > $20
+all_stock_data <- subset(all_stock_data, all_stock_data$Last.Sale > 20)
+
+#List of tickers
+tickers <- all_stock_data$Stock.Symbol
+
+#Make list for cluster code (https://stackoverflow.com/questions/43262615/r-increase-my-rvest-scrapers-speed)
+tickers_list <- paste0("https://coincodex.com/stock/", tickers, "/price-prediction/")
+
+#Stock Code using clusters####
+cluster = makeCluster(2, type = "SOCK")
+
+registerDoSNOW(cluster)
+
+abstracts <-function(tickers_list){
+  library(rvest)
+  library(stringr)
+  
+  page <- tryCatch({
+    page <- rvest::session(tickers_list)
+  },
+  error = function(e){NA}
+  )
+  
+  abstracts <- tryCatch({
+    abstracts <- rvest::html_nodes(read_html(page), css=".data-predicted-price") %>% 
+      rvest::html_text()
+  },
+  error = function(e){NA}
+  )
+  
+  return(abstracts)
+
+}
+
+#Round 1
+round_one_stock_data <- unlist(foreach(i = 1:nrow(all_stock_data)) %dopar% abstracts(tickers_list[i]))
+
+round_one_stock_data <- round_one_stock_data %>%
+                              gsub("\\(.*","",. ) %>%
+                              gsub(".*\\$","",. ) %>%
+                              stringr::str_trim() %>%
+                              as.numeric()
+
+round_one_stock_data <- cbind(tickers, round_one_stock_data)
+round_one_stock_data <- as.data.frame(round_one_stock_data)
+
+round_one_with_data <- subset(round_one_stock_data, is.na(round_one_stock_data) == FALSE)
+
+colnames(round_one_with_data)[1] <- "ticker"
+colnames(round_one_with_data)[2] <- "rating"
+
+round_one_without_data <- subset(round_one_stock_data$tickers, is.na(round_one_stock_data$round_one_stock_data) == TRUE)
+round_one_without_data_df <- as.data.frame(round_one_without_data)
+
+#Round 2
+tickers_list2 <- paste0("https://coincodex.com/stock/", round_one_without_data, "/price-prediction/")
+
+round_two_stock_data <- unlist(foreach(i = 1:nrow(round_one_without_data_df)) %dopar% abstracts(tickers_list2[i]))
+
+round_two_stock_data <- round_two_stock_data %>%
+                                   gsub("\\(.*","",. ) %>%
+                                   gsub(".*\\$","",. ) %>%
+                                   stringr::str_trim() %>%
+                                   as.numeric()
+
+round_two_stock_data <- cbind(round_one_without_data, round_two_stock_data)
+round_two_stock_data <- as.data.frame(round_two_stock_data)
+
+round_two_with_data <- subset(round_two_stock_data, is.na(round_two_stock_data) == FALSE)
+
+colnames(round_two_with_data)[1] <- "ticker"
+colnames(round_two_with_data)[2] <- "rating"
+
+round_two_without_data <- subset(round_two_stock_data, is.na(round_two_stock_data) == TRUE)
+round_two_without_data_df <- as.data.frame(round_two_without_data)
+
+#Round 3
+tickers_list3 <- paste0("https://coincodex.com/stock/", round_two_without_data, "/price-prediction/")
+
+round_three_stock_data <- unlist(foreach(i = 1:nrow(round_two_without_data_df)) %dopar% abstracts(tickers_list3[i]))
+
+round_three_stock_data <- round_three_stock_data %>%
+                                   gsub("\\(.*","",. ) %>%
+                                   gsub(".*\\$","",. ) %>%
+                                   stringr::str_trim() %>%
+                                   as.numeric()
+
+round_three_stock_data <- cbind(round_two_without_data, round_three_stock_data)
+round_three_stock_data <- as.data.frame(round_three_stock_data)
+
+round_three_with_data <- subset(round_three_stock_data, is.na(round_three_stock_data) == FALSE)
+
+colnames(round_three_with_data)[1] <- "ticker"
+colnames(round_three_with_data)[2] <- "rating"
+
+round_three_without_data <- subset(round_three_stock_data, is.na(round_three_stock_data) == TRUE)
+round_three_without_data_df <- as.data.frame(round_three_without_data)
+
+#Round 4
+tickers_list4 <- paste0("https://coincodex.com/stock/", round_three_without_data, "/price-prediction/")
+
+round_four_stock_data <- unlist(foreach(i = 1:nrow(round_three_without_data)) %dopar% abstracts(tickers_list4[i]))
+
+round_four_stock_data <- round_four_stock_data %>%
+                                   gsub("\\(.*","",. ) %>%
+                                   gsub(".*\\$","",. ) %>%
+                                   stringr::str_trim() %>%
+                                   as.numeric()
+
+round_four_stock_data <- cbind(round_three_without_data, round_four_stock_data)
+round_four_stock_data <- as.data.frame(round_four_stock_data)
+
+round_four_with_data <- subset(round_four_stock_data, is.na(round_four_stock_data) == FALSE)
+
+colnames(round_four_with_data)[1] <- "ticker"
+colnames(round_four_with_data)[2] <- "rating"
+
+round_four_without_data <- subset(round_four_stock_data, is.na(round_four_stock_data) == TRUE)
+
+#General ratings function####
+ratings_function <- function(tickers, webscraper_function){
+  
+  stock_rating <- lapply(tickers, webscraper_function)
+  
+  rating_data <- rbind(tickers, stock_rating)
+  
+}
+
+price_prediction_webscraper <- function(ticker){
+  
+  coin_codex_price_prediction <- tryCatch({
+    
+    price_prediction <- xml2::read_html(paste0("https://coincodex.com/stock/", ticker,"/price-prediction/")) %>%
+      rvest::html_nodes(".data-predicted-price") %>%
+      rvest::html_text() %>%
+      gsub("\\(.*","",. ) %>%
+      gsub(".*\\$","",. ) %>%
+      stringr::str_trim() %>%
+      as.numeric()
+  },
+  error = function(e){NA}
+  )
+  
+}
+
+coin_codex_dollar_profit_results1 <- ratings_function(round_four_without_data, price_prediction_webscraper)
+coin_codex_dollar_profit_results1 <- coin_codex_dollar_profit_results1[,c(1,4)]
+coin_codex_dollar_profit_results_df1 <- as.data.frame(coin_codex_dollar_profit_results1)
+
+colnames(coin_codex_dollar_profit_results_df1)[1] <- "ticker"
+colnames(coin_codex_dollar_profit_results_df1)[2] <- "rating"
+
+final_stock_rating_data <- rbind(round_one_with_data, round_two_with_data)
+final_stock_rating_data <- rbind(final_stock_rating_data, round_three_with_data)
+final_stock_rating_data <- rbind(final_stock_rating_data, round_four_with_data)
+final_stock_rating_data <- rbind(final_stock_rating_data, coin_codex_dollar_profit_results_df1)
+
+#Combining ticker data with price prediction
+all_stock_data_with_rating <- merge(all_stock_data, final_stock_rating_data, by.x = "Stock.Symbol", by.y = "ticker", all = T)
+
+all_stock_data_with_rating$rating <- as.numeric(all_stock_data_with_rating$rating)
+
+all_stock_data_with_rating$stock_rating_percent <- ((all_stock_data_with_rating$rating - all_stock_data_with_rating$Last.Sale)/all_stock_data_with_rating$Last.Sale)*100
+
+#Preparing Graphs####
+findoutlier <- function(x) {
+  return(x < quantile(x, .25) - 1.5*IQR(x) | x > quantile(x, .75) + 1.5*IQR(x))
+}
+
+percent_rating_subset <- subset(all_stock_data_with_rating,  is.na(stock_rating_percent) == FALSE)
+
+percent_rating_data <- percent_rating_subset %>%
+  group_by(Sector) %>%
+  mutate(outlier = ifelse(findoutlier(stock_rating_percent), Stock.Symbol, NA))
+
+percent_rating_data_subset <- subset(percent_rating_data, percent_rating_data$stock_rating_percent > -50 & percent_rating_data$stock_rating_percent < 50)
+
+#Graph of Sector Rating variation (Focus on Profitable Outliers)
+ggplot(percent_rating_data_subset, aes(x = Sector, y = stock_rating_percent, fill = Sector)) +
+  geom_boxplot() +
+  geom_label_repel(aes(label=outlier), na.rm = TRUE) +
+  coord_flip() +
+  ylab("5 Day Predicted Percent Price Change (%)")
+
+rm("cboesymboldirweeklys")
+rm("all_stock_data")
+rm("cluster")
+rm("coin_codex_dollar_profit_results1")
+rm("coin_codex_dollar_profit_results_df1")
+rm("round_four_stock_data")
+rm("round_four_with_data")
+rm("round_four_without_data")
+rm("round_three_stock_data")
+rm("round_three_with_data")
+rm("round_three_without_data")
+rm("round_three_without_data_df")
+rm("round_two_stock_data")
+rm("round_two_with_data")
+rm("round_two_without_data")
+rm("round_two_without_data_df")
+rm("round_one_stock_data")
+rm("round_one_with_data")
+rm("round_one_without_data")
+rm("round_one_without_data_df")
+rm("tickers")
+rm("tickers_list")
+rm("tickers_list2")
+rm("tickers_list3")
+rm("tickers_list4")
