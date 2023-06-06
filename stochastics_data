@@ -1,0 +1,564 @@
+#Pattern Predictions####
+
+#Include short term yahoo finance bullish, bearish, neautral trend prediction at top of graph page
+
+#Clear data, if needed####
+#rm(list = ls())
+
+#Package libraries####
+library(tidyverse)
+library(utils)
+library(xml2)
+library(rvest)
+library(stringr)
+library(ggrepel)
+library(doSNOW)
+library(foreach)
+library(ggplot2)
+
+#Setting Working Directory
+setwd("~/StockProject")
+
+#Functions####
+ratings_function <- function(tickers, webscraper_function){
+  
+  stock_rating <- lapply(tickers, webscraper_function)
+  
+  rating_data <- rbind(tickers, stock_rating)
+  
+}
+
+stoch_table <- function(ticker){
+  
+  library(xml2)
+  library(rvest)
+  library(stringr)
+  
+  stoch_table <- tryCatch({
+    
+    stoch_table <- xml2::read_html(ticker) %>%
+      rvest::html_nodes("table") %>%
+      rvest::html_table() %>%
+      .[[2]]
+  },
+  error = function(e){NA}
+  )
+  
+  stoch_perc_d <- tryCatch({
+    
+    stoch_perc_d <- stoch_table[2,4] %>%
+      gsub("%", " ", .) %>%
+      stringr::str_trim() %>%
+      as.numeric()
+  },
+  error = function(e){NA}
+  
+  )
+  
+  stoch_perc_k <- tryCatch({
+    
+    stoch_perc_k <- stoch_table[2,3] %>%
+      gsub("%", " ", .) %>%
+      stringr::str_trim() %>%
+      as.numeric()
+  },
+  error = function(e){NA}
+  
+  )
+  
+  stoch_perc <- paste0(stoch_perc_d, " ", stoch_perc_k)
+  
+  return(stoch_perc)
+  
+}
+
+barchart_pattern_price_df <- function(barchart_pattern_data){
+  
+  #"ET" during the trading day; "/23" before- and after- hours
+  barchart_price_df <- str_split(barchart_pattern_data, "ET") %>%
+    as.data.frame()
+  
+  names(barchart_price_df)[1] ="price"
+  
+  barchart_price_df$price <- gsub("\\\n", " ", barchart_price_df$price) %>%
+    str_trim() %>%
+    sub("^\\D+", "", .) %>%
+    sub(" .*", "", .) %>%
+    as.numeric()
+  
+}
+
+barchart_pattern_ticker_df <- function(barchart_pattern_data){
+  
+  #"ET" during the trading day; "/23" before- and after- hours
+  barchart_pattern_df <- str_split(barchart_pattern_data, "ET") %>%
+    as.data.frame()
+  
+  names(barchart_pattern_df)[1] ="tickers"
+  
+  barchart_pattern_df$tickers <- gsub("\\\n", " ", barchart_pattern_df$tickers) %>%
+    str_trim() %>%
+    sub(" .*", "", .)
+  
+}
+
+#Applying code####
+#List of tickers
+ticker <- read.csv("tickers.csv", stringsAsFactors=FALSE)
+
+#List of tickers
+ticker <- ticker$ticker
+
+#Make list for cluster code (https://stackoverflow.com/questions/43262615/r-increase-my-rvest-scrapers-speed)
+URL <- paste0("https://www.barchart.com/stocks/quotes/", ticker, "/technical-analysis")
+
+URL <- as.data.frame(t(rbind(ticker, URL)))
+
+fourteen_day_stoch <- ratings_function(URL$URL, stoch_table)
+
+fourteen_day_stoch_df <- fourteen_day_stoch %>%
+  as.data.frame() %>%
+  t(.) %>%
+  .[,2] %>%
+  as.character() %>%
+  strsplit(.," ") %>%
+  as.data.frame() %>%
+  t(.)
+
+stock_data <- cbind(URL, fourteen_day_stoch_df)
+
+colnames(stock_data)[3] <- "stoch_perc_d"
+colnames(stock_data)[4] <- "stoch_perc_k"
+
+#CoinCodex profitability data####
+#Make list for cluster code (https://stackoverflow.com/questions/43262615/r-increase-my-rvest-scrapers-speed)
+barchart_tickers_list <- paste0("https://coincodex.com/stock/", stock_data$ticker, "/price-prediction/")
+
+#Stock Code using clusters
+cluster = makeCluster(2, type = "SOCK")
+
+registerDoSNOW(cluster)
+
+abstracts <- function(tickers_list){
+  library(rvest)
+  library(stringr)
+  
+  page <- tryCatch({
+    page <- rvest::session(tickers_list)
+  },
+  error = function(e){NA}
+  )
+  
+  abstracts <- tryCatch({
+    abstracts <- rvest::html_nodes(read_html(page), css=".data-predicted-price") %>% 
+      rvest::html_text()
+  },
+  error = function(e){NA}
+  )
+  
+  return(abstracts)
+  
+}
+
+#Round 1
+barchart_pattern_full_data <- unlist(foreach(i = 1:nrow(stock_data)) %dopar% abstracts(barchart_tickers_list[i]))
+
+price_predictions <- barchart_pattern_full_data %>%
+  gsub("\\(.*","", .) %>%
+  gsub(".*\\$","", .) %>%
+  stringr::str_trim(.) %>%
+  as.numeric(.)
+
+barchart_pattern_data <- cbind(stock_data, price_predictions)
+barchart_pattern_full_data <- as.data.frame(barchart_pattern_data)
+
+round_one_with_data <- subset(barchart_pattern_full_data, is.na(barchart_pattern_full_data$price_predictions) == FALSE)
+
+colnames(round_one_with_data)[1] <- "Symbol"
+
+round_one_without_data <- subset(barchart_pattern_full_data, is.na(barchart_pattern_full_data$price_predictions) == TRUE)
+round_one_without_data_df <- as.data.frame(round_one_without_data)
+
+#Round 2
+tickers_list <- paste0("https://coincodex.com/stock/", round_one_without_data_df$ticker, "/price-prediction/")
+
+barchart_pattern_full_data <- unlist(foreach(i = 1:nrow(round_one_without_data_df)) %dopar% abstracts(tickers_list[i]))
+
+barchart_pattern_full_data <- barchart_pattern_full_data %>%
+  gsub("\\(.*","",. ) %>%
+  gsub(".*\\$","",. ) %>%
+  stringr::str_trim() %>%
+  as.numeric()
+
+barchart_pattern_full_data <- cbind(round_one_without_data, barchart_pattern_full_data)
+barchart_pattern_full_data <- as.data.frame(barchart_pattern_full_data)
+
+round_two_with_data <- subset(barchart_pattern_full_data, is.na(barchart_pattern_full_data) == FALSE)
+
+colnames(round_two_with_data)[1] <- "Symbol"
+
+round_two_without_data <- subset(barchart_pattern_full_data, is.na(barchart_pattern_full_data) == TRUE)
+round_two_without_data_df <- as.data.frame(round_two_without_data)
+
+#Round 3
+tickers_list <- paste0("https://coincodex.com/stock/", round_two_without_data$ticker, "/price-prediction/")
+
+barchart_pattern_full_data <- unlist(foreach(i = 1:nrow(round_two_without_data_df)) %dopar% abstracts(tickers_list[i]))
+
+barchart_pattern_full_data <- barchart_pattern_full_data %>%
+  gsub("\\(.*","",. ) %>%
+  gsub(".*\\$","",. ) %>%
+  stringr::str_trim() %>%
+  as.numeric()
+
+barchart_pattern_full_data <- cbind(round_two_without_data, barchart_pattern_full_data)
+barchart_pattern_full_data <- as.data.frame(barchart_pattern_full_data)
+
+round_three_with_data <- subset(barchart_pattern_full_data, is.na(barchart_pattern_full_data) == FALSE)
+
+colnames(round_three_with_data)[1] <- "Symbol"
+
+round_three_without_data <- subset(barchart_pattern_full_data, is.na(barchart_pattern_full_data) == TRUE)
+round_three_without_data_df <- as.data.frame(round_three_without_data)
+
+#Round 4
+tickers_list <- paste0("https://coincodex.com/stock/", round_three_without_data$ticker, "/price-prediction/")
+
+barchart_pattern_full_data <- unlist(foreach(i = 1:nrow(round_three_without_data_df)) %dopar% abstracts(tickers_list[i]))
+
+barchart_pattern_full_data <- barchart_pattern_full_data %>%
+  gsub("\\(.*","",. ) %>%
+  gsub(".*\\$","",. ) %>%
+  stringr::str_trim() %>%
+  as.numeric()
+
+barchart_pattern_full_data <- cbind(round_three_without_data, barchart_pattern_full_data)
+barchart_pattern_full_data <- as.data.frame(barchart_pattern_full_data)
+
+round_four_with_data <- subset(barchart_pattern_full_data, is.na(barchart_pattern_full_data) == FALSE)
+
+colnames(round_four_with_data)[1] <- "Symbol"
+
+final_stock_rating_data <- round_one_with_data
+final_stock_rating_data <- rbind(final_stock_rating_data, round_two_with_data[1,4])
+final_stock_rating_data <- rbind(final_stock_rating_data, round_three_with_data[1,4])
+final_stock_rating_data <- rbind(final_stock_rating_data, round_four_with_data[1,4])
+
+#Retrieving Stock Data From CSV (https://www.nasdaq.com/market-activity/stocks/screener)####
+all_stock_data <- read.csv("nasdaq_screener.csv", stringsAsFactors=FALSE)
+
+#Changing stock prices to numeric
+all_stock_data$Last.Sale <- gsub(".*\\$","",all_stock_data$Last.Sale)
+all_stock_data$Last.Sale <- as.numeric(all_stock_data$Last.Sale)
+
+#Avoiding errors
+all_stock_data$Symbol <- gsub("/", "REMOVE", all_stock_data$Symbol)
+all_stock_data$Symbol <- gsub("[ ^]", "REMOVE", all_stock_data$Symbol)
+all_stock_data <- all_stock_data[-grep("REMOVE", all_stock_data$Symbol), ]
+
+all_data <- merge(final_stock_rating_data, all_stock_data, by.x = "Symbol", by.y = "Symbol")
+
+final_stock_rating_data <- all_data[,c(1,6:15,3:5)]
+
+final_stock_rating_data$price_predictions <- as.numeric(final_stock_rating_data$price_predictions)
+
+final_stock_rating_data$stock_rating_percent <- ((final_stock_rating_data$price_predictions - final_stock_rating_data$Last.Sale)/final_stock_rating_data$Last.Sale)*100
+
+#Barchart website pattern data####
+#General Webpage: https://www.barchart.com/investing-ideas/candlestick-patterns/stocks?timeFrame=current
+#DOJI####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/doji?orderBy=lastPrice&orderDir=desc&page=all
+doji_data <- c("
+
+")
+
+doji <- barchart_pattern_price_df(doji_data)
+tickers <- barchart_pattern_ticker_df(doji_data)
+
+doji_df <- cbind(doji, tickers)
+
+#DOJI YESTERDAY####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/doji-previous?orderBy=lastPrice&orderDir=desc&page=all
+doji_yesterday_data <- c("
+")
+
+doji_yesterday <- barchart_pattern_price_df(doji_yesterday_data)
+tickers <- barchart_pattern_ticker_df(doji_yesterday_data)
+
+doji_yesterday_df <- cbind(doji_yesterday, tickers)
+
+#DOJI AND NEAR DOJI####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/near-doji?orderBy=lastPrice&orderDir=desc&page=all
+doji_and_near_doji_data <- c("
+")
+
+doji_and_near_doji <- barchart_pattern_price_df(doji_and_near_doji_data)
+tickers <- barchart_pattern_ticker_df(doji_and_near_doji_data)
+
+doji_and_near_doji_df <- cbind(doji_and_near_doji, tickers)
+
+#BULLISH ENGULFING####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/engulfing-bullish?orderBy=lastPrice&orderDir=desc&page=all
+bullish_engulfing_data <- c("
+")
+
+bullish_engulfing <- barchart_pattern_price_df(bullish_engulfing_data)
+tickers <- barchart_pattern_ticker_df(bullish_engulfing_data)
+
+bullish_engulfing_df <- cbind(bullish_engulfing, tickers)
+
+#BEARISH ENGULFING####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/engulfing-bearish?orderBy=lastPrice&orderDir=desc&page=all
+bearish_engulfing_data <- c("
+")
+
+bearish_engulfing <- barchart_pattern_price_df(bearish_engulfing_data)
+tickers <- barchart_pattern_ticker_df(bearish_engulfing_data)
+
+bearish_engulfing_df <- cbind(bearish_engulfing, tickers)
+
+#HAMMER####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/hammer?orderBy=lastPrice&orderDir=desc&page=all
+hammer_data <- c("
+")
+
+hammer <- barchart_pattern_price_df(hammer_data)
+tickers <- barchart_pattern_ticker_df(hammer_data)
+
+hammer_df <- cbind(hammer, tickers)
+
+#INVERTED HAMMER####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/inverted-hammer?orderBy=lastPrice&orderDir=desc&page=all
+inverted_hammer_data <- c("
+")
+
+inverted_hammer <- barchart_pattern_price_df(inverted_hammer_data)
+tickers <- barchart_pattern_ticker_df(inverted_hammer_data)
+
+inverted_hammer_df <- cbind(inverted_hammer, tickers)
+
+#HANGING MAN####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/hanging-man?orderBy=lastPrice&orderDir=desc&page=all
+hanging_man_data <- c("
+")
+
+hanging_man <- barchart_pattern_price_df(hanging_man_data)
+tickers <- barchart_pattern_ticker_df(hanging_man_data)
+
+hanging_man_df <- cbind(hanging_man, tickers)
+
+#PIERCING LINE####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/piercing-line?orderBy=lastPrice&orderDir=desc&page=all
+piercing_line_data <- c("
+")
+
+piercing_line <- barchart_pattern_price_df(piercing_line_data)
+tickers <- barchart_pattern_ticker_df(piercing_line_data)
+
+piercing_line_df <- cbind(piercing_line, tickers)
+
+#DARK CLOUD####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/dark-cloud?orderBy=lastPrice&orderDir=desc&page=all
+dark_cloud_data <- c("
+")
+
+dark_cloud <- barchart_pattern_price_df(dark_cloud_data)
+tickers <- barchart_pattern_ticker_df(dark_cloud_data)
+
+dark_cloud_df <- cbind(dark_cloud, tickers)
+
+#BULLISH HARAMI####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/harami-bullish?orderBy=lastPrice&orderDir=desc&page=all
+bullish_harami_data <- c("
+")
+
+bullish_harami <- barchart_pattern_price_df(bullish_harami_data)
+tickers <- barchart_pattern_ticker_df(bullish_harami_data)
+
+bullish_harami_df <- cbind(bullish_harami, tickers)
+
+#BEARISH HARAMI####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/harami-bearish?orderBy=lastPrice&orderDir=desc&page=all
+bearish_harami_data <- c("
+")
+
+bearish_harami <- barchart_pattern_price_df(bearish_harami_data)
+tickers <- barchart_pattern_ticker_df(bearish_harami_data)
+
+bearish_harami_df <- cbind(bearish_harami, tickers)
+
+#MORNING STAR####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/morning-star?orderBy=lastPrice&orderDir=desc&page=all
+morning_star_data <- c("
+")
+
+morning_star <- barchart_pattern_price_df(morning_star_data)
+tickers <- barchart_pattern_ticker_df(morning_star_data)
+
+morning_star_df <- cbind(morning_star, tickers)
+
+#EVENING STAR####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/evening-star?orderBy=lastPrice&orderDir=desc&page=all
+evening_star_data <- c("
+")
+
+evening_star <- barchart_pattern_price_df(evening_star_data)
+tickers <- barchart_pattern_ticker_df(evening_star_data)
+
+evening_star_df <- cbind(evening_star, tickers)
+
+#BULLISH KICKER####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/kicker-bullish?orderBy=lastPrice&orderDir=desc&page=all
+bullish_kicker_data <- c("
+")
+
+bullish_kicker <- barchart_pattern_price_df(bullish_kicker_data)
+tickers <- barchart_pattern_ticker_df(bullish_kicker_data)
+
+bullish_kicker_df <- cbind(bullish_kicker, tickers)
+
+#BEARISH KICKER####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/kicker-bearish?orderBy=lastPrice&orderDir=desc&page=all
+bearish_kicker_data <- c("
+")
+
+bearish_kicker <- barchart_pattern_price_df(bearish_kicker_data)
+tickers <- barchart_pattern_ticker_df(bearish_kicker_data)
+
+bearish_kicker_df <- cbind(bearish_kicker, tickers)
+
+#SHOOTING STAR####
+#https://www.barchart.com/investing-ideas/candlestick-patterns/stocks/shooting-star?orderBy=lastPrice&orderDir=desc&page=all
+shooting_star_data <- c("
+")
+
+shooting_star <- barchart_pattern_price_df(shooting_star_data)
+tickers <- barchart_pattern_ticker_df(shooting_star_data)
+
+shooting_star_df <- cbind(shooting_star, tickers)
+
+#Combining BarChart Data####
+all_barchart_data <- merge(doji_df, doji_yesterday_df, all = T)
+all_barchart_data <- merge(all_barchart_data, doji_and_near_doji_df, all = T)
+all_barchart_data <- merge(all_barchart_data, bullish_engulfing_df, all = T)
+all_barchart_data <- merge(all_barchart_data, bearish_engulfing_df, all = T)
+all_barchart_data <- merge(all_barchart_data, hammer_df, all = T)
+all_barchart_data <- merge(all_barchart_data, inverted_hammer_df, all = T)
+all_barchart_data <- merge(all_barchart_data, hanging_man_df, all = T)
+all_barchart_data <- merge(all_barchart_data, piercing_line_df, all = T)
+all_barchart_data <- merge(all_barchart_data, dark_cloud_df, all = T)
+all_barchart_data <- merge(all_barchart_data, bullish_harami_df, all = T)
+all_barchart_data <- merge(all_barchart_data, bearish_harami_df, all = T)
+all_barchart_data <- merge(all_barchart_data, morning_star_df, all = T)
+all_barchart_data <- merge(all_barchart_data, evening_star_df, all = T)
+all_barchart_data <- merge(all_barchart_data, bullish_kicker_df, all = T)
+all_barchart_data <- merge(all_barchart_data, bearish_kicker_df, all = T)
+all_barchart_data <- merge(all_barchart_data, shooting_star_df, all = T)
+
+#Barchart Trend Validation####
+all_barchart_data$doji <- ifelse(is.na(all_barchart_data$doji) == TRUE, "No", "Yes")
+all_barchart_data$doji_yesterday <- ifelse(is.na(all_barchart_data$doji_yesterday) == TRUE, "No", "Yes")
+all_barchart_data$doji_and_near_doji <- ifelse(is.na(all_barchart_data$doji_and_near_doji) == TRUE, "No", "Yes")
+all_barchart_data$bullish_engulfing <- ifelse(is.na(all_barchart_data$bullish_engulfing) == TRUE, "No", "Yes")
+all_barchart_data$bearish_engulfing <- ifelse(is.na(all_barchart_data$bearish_engulfing) == TRUE, "No", "Yes")
+all_barchart_data$hammer <- ifelse(is.na(all_barchart_data$hammer) == TRUE, "No", "Yes")
+all_barchart_data$inverted_hammer <- ifelse(is.na(all_barchart_data$inverted_hammer) == TRUE, "No", "Yes")
+all_barchart_data$hanging_man <- ifelse(is.na(all_barchart_data$hanging_man) == TRUE, "No", "Yes")
+all_barchart_data$piercing_line <- ifelse(is.na(all_barchart_data$piercing_line) == TRUE, "No", "Yes")
+all_barchart_data$dark_cloud <- ifelse(is.na(all_barchart_data$dark_cloud) == TRUE, "No", "Yes")
+all_barchart_data$bullish_harami <- ifelse(is.na(all_barchart_data$bullish_harami) == TRUE, "No", "Yes")
+all_barchart_data$bearish_harami <- ifelse(is.na(all_barchart_data$bearish_harami) == TRUE, "No", "Yes")
+all_barchart_data$morning_star <- ifelse(is.na(all_barchart_data$morning_star) == TRUE, "No", "Yes")
+all_barchart_data$evening_star <- ifelse(is.na(all_barchart_data$evening_star) == TRUE, "No", "Yes")
+all_barchart_data$bullish_kicker <- ifelse(is.na(all_barchart_data$bullish_kicker) == TRUE, "No", "Yes")
+all_barchart_data$bearish_kicker <- ifelse(is.na(all_barchart_data$bearish_kicker) == TRUE, "No", "Yes")
+all_barchart_data$shooting_star <- ifelse(is.na(all_barchart_data$shooting_star) == TRUE, "No", "Yes")
+
+
+#Combining all data####
+
+complete_stock_data <- merge(final_stock_rating_data, all_barchart_data, by.x = "Symbol", by.y = "tickers", all = T)
+
+complete_stock_data <- subset(complete_stock_data, is.na(complete_stock_data$Volume) == FALSE)
+
+#Preparing Graphs####
+findoutlier <- function(x) {
+  return(x < quantile(x, .25) - 1.5*IQR(x) | x > quantile(x, .75) + 1.5*IQR(x))
+}
+
+percent_rating_subset <- subset(complete_stock_data,  is.na(stock_rating_percent) == FALSE)
+
+percent_rating_data <- percent_rating_subset %>%
+  group_by(Sector) %>%
+  mutate(outlier = ifelse(findoutlier(stock_rating_percent), ticker, NA))
+
+percent_rating_data_subset <- subset(percent_rating_data, percent_rating_data$stock_rating_percent > -75 & percent_rating_data$stock_rating_percent < 75)
+
+ggplot(percent_rating_data_subset, aes(x = Sector, y = stock_rating_percent, fill = Sector)) +
+  geom_boxplot() +
+  geom_label_repel(aes(label=outlier), na.rm = TRUE) +
+  coord_flip() +
+  ylab("5 Day Predicted Percent Price Change (%)")
+
+percent_rating_data_overbought <- subset(percent_rating_data, stoch_perc_k > 80 & stoch_perc_d > 80)
+percent_rating_data_oversold <- subset(percent_rating_data, stoch_perc_k < 20 & stoch_perc_k < 20)
+
+#Oversold, bullish graphs####
+ggplot(percent_rating_data_oversold, aes(x = Sector, y = stock_rating_percent, fill = Sector)) +
+  geom_boxplot() +
+  geom_label_repel(aes(label=Symbol), na.rm = TRUE) +
+  coord_flip() +
+  ylab("Oversold 5 Day Predicted Percent Price Change (%)")
+
+#Top Oversold Bullish
+# Top N highest values by group
+most_profitable_oversold <- percent_rating_data_oversold %>%                                      
+  arrange(desc(stock_rating_percent)) %>% 
+  .[1:15,]
+
+most_profitable_oversold_df <- most_profitable_oversold[,c(1,15)]
+
+ggplot(data = most_profitable_oversold_df, aes(x = reorder(Symbol, -stock_rating_percent), y = stock_rating_percent)) +
+  geom_bar(stat="identity", fill="limegreen") +
+  geom_text(aes(label=paste0(round(stock_rating_percent,2),"%")), vjust=1.6, color="black", size=3.5)+
+  theme_minimal() + 
+  labs(
+    title = "Top 15 1-Week Oversold Stock Profit Percentages",
+    x = "Stock Ticker",
+    y = "Profit Percent"
+  ) +
+  theme( # remove the vertical grid lines
+    panel.grid.major.x = element_blank() ,
+    # explicitly set the horizontal lines (or they will disappear too)
+    panel.grid.major.y = element_line(color="black", size = (.5)) 
+  )
+
+#Overbought, bearish graphs####
+ggplot(percent_rating_data_overbought, aes(x = Sector, y = stock_rating_percent, fill = Sector)) +
+  geom_boxplot() +
+  geom_label_repel(aes(label=Symbol), na.rm = TRUE) +
+  coord_flip() +
+  ylab("Overbought 5 Day Predicted Percent Price Change (%)")
+
+#Top Overbought Bearish
+# Top N highest values by group
+most_profitable_overbought <- percent_rating_data_overbought %>%                                      
+  arrange(stock_rating_percent) %>% 
+  .[1:15,]
+
+most_profitable_overbought_df <- most_profitable_overbought[,c(1,15)]
+
+ggplot(data = most_profitable_overbought_df, aes(x = reorder(Symbol, stock_rating_percent), y = stock_rating_percent)) +
+  geom_bar(stat="identity", fill="red") +
+  geom_text(aes(label=paste0(round(stock_rating_percent,2),"%")), vjust=-1.6, color="white", size=3.5)+
+  theme_minimal() + 
+  labs(
+    title = "Top 15 1-Week Overbought Stock Profit Percentages",
+    x = "Stock Ticker",
+    y = "Profit Percent"
+  ) +
+  theme( # remove the vertical grid lines
+    panel.grid.major.x = element_blank() ,
+    # explicitly set the horizontal lines (or they will disappear too)
+    panel.grid.major.y = element_line(color="white", size = (.5)) 
+  )
